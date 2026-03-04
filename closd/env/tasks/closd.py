@@ -248,7 +248,7 @@ class CLoSD(humanoid_im.HumanoidIm):
 
         # init prefix from humanml real data if exists at the first MDM call
         # used for the text-to-motion task only!
-        if hasattr(self, 'hml_prefix_from_data'):
+        if hasattr(self, 'hml_prefix_from_data') and self.cfg['env'].get('use_dataset_prefix', False):
             is_first_iter = self.progress_buf < self.planning_horizon_30fps
             hml_context[is_first_iter] = self.hml_prefix_from_data[is_first_iter, :, :, -self.context_len_20fps:]
 
@@ -421,7 +421,7 @@ class CLoSD(humanoid_im.HumanoidIm):
 
         # init planning_horizon from humanml real data if exists
         # In used for the text-to-motion task only!
-        if hasattr(self, 'hml_prefix_from_data'):
+        if hasattr(self, 'hml_prefix_from_data') and self.cfg['env'].get('use_dataset_prefix', False):
             # convert prefix to isaac format
             # cur_frame = self.rep.sim_pose_to_ref_pose(self._rigid_body_pos)
             sim_at_hml_idx = (self.frame_idx % self.planning_horizon_30fps) * 20 // 30  # FIXME: check if we need a '-1' here

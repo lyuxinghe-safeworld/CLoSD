@@ -41,14 +41,107 @@ pip install -r requirement.txt
 python -m spacy download en_core_web_sm
 ```
 
-  - Download [Isaac GYM](https://developer.nvidia.com/isaac-gym), and install it to your env:
+  - Optional: initialize conda for all new bash terminals:
+
+```
+~/miniforge3/bin/conda init bash
+exec bash -l
+```
+
+  - Install Isaac Gym Preview 4 (required by CLoSD).  
+    Option A: reuse an existing Isaac Gym checkout:
 
 ```
 conda activate closd
-cd <ISSAC_GYM_DIR>/python
+cd <ISAAC_GYM_DIR>/python
 pip install -e .
 ```
 
+  - Option B: compact install from scratch (tested on Ubuntu 22.04):
+
+```
+conda activate closd
+
+# Download + extract Isaac Gym Preview 4
+mkdir -p ~/.cache/isaacgym ~/.local/src
+curl -fL https://developer.nvidia.com/isaac-gym-preview-4 \
+  -o ~/.cache/isaacgym/IsaacGym_Preview_4_Package.tar.gz
+tar -xzf ~/.cache/isaacgym/IsaacGym_Preview_4_Package.tar.gz -C ~/.local/src
+
+# Optional stable symlink used by commands below
+ln -sfn ~/.local/src/isaacgym ~/isaacgym
+
+# Install python package
+pip install -e ~/isaacgym/python
+```
+
+  - Runtime env vars (recommended for VM/VNC setups):
+
+```
+export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:$HOME/isaacgym/python/isaacgym/_bindings/linux-x86_64:${LD_LIBRARY_PATH}"
+export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
+```
+
+  - Persist the runtime env vars on every `conda activate closd` (recommended):
+
+```
+conda activate closd
+mkdir -p "$CONDA_PREFIX/etc/conda/activate.d" "$CONDA_PREFIX/etc/conda/deactivate.d"
+
+cat > "$CONDA_PREFIX/etc/conda/activate.d/isaacgym-runtime.sh" <<'EOF'
+export ISAACGYM_PATH="${ISAACGYM_PATH:-$HOME/isaacgym}"
+if [ -z "${ISAACGYM_OLD_LD_LIBRARY_PATH+x}" ]; then
+  export ISAACGYM_OLD_LD_LIBRARY_PATH="${LD_LIBRARY_PATH-}"
+fi
+if [ -z "${ISAACGYM_OLD_VK_ICD_FILENAMES+x}" ]; then
+  export ISAACGYM_OLD_VK_ICD_FILENAMES="${VK_ICD_FILENAMES-}"
+fi
+new_ld="$CONDA_PREFIX/lib:$ISAACGYM_PATH/python/isaacgym/_bindings/linux-x86_64"
+if [ -n "${LD_LIBRARY_PATH-}" ]; then
+  export LD_LIBRARY_PATH="$new_ld:$LD_LIBRARY_PATH"
+else
+  export LD_LIBRARY_PATH="$new_ld"
+fi
+if [ -f /usr/share/vulkan/icd.d/nvidia_icd.json ]; then
+  export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
+fi
+EOF
+
+cat > "$CONDA_PREFIX/etc/conda/deactivate.d/isaacgym-runtime.sh" <<'EOF'
+if [ -n "${ISAACGYM_OLD_LD_LIBRARY_PATH+x}" ]; then
+  export LD_LIBRARY_PATH="$ISAACGYM_OLD_LD_LIBRARY_PATH"
+  unset ISAACGYM_OLD_LD_LIBRARY_PATH
+fi
+if [ -n "${ISAACGYM_OLD_VK_ICD_FILENAMES+x}" ]; then
+  if [ -n "$ISAACGYM_OLD_VK_ICD_FILENAMES" ]; then
+    export VK_ICD_FILENAMES="$ISAACGYM_OLD_VK_ICD_FILENAMES"
+  else
+    unset VK_ICD_FILENAMES
+  fi
+  unset ISAACGYM_OLD_VK_ICD_FILENAMES
+fi
+EOF
+```
+
+  - Quick verification:
+
+```
+nvidia-smi
+python -c "from isaacgym import gymapi; print('isaacgym ok')"
+```
+
+  - Note: when writing custom scripts, import order must be `isaacgym` before `torch`.
+
+</details>
+
+<details>
+  <summary><b>Working with VNC</b></summary>
+  To render within VM, run the following command in the local machine, then connect to the VM monitor through the localhost port
+```
+gcloud compute ssh human-motion-exps \
+  --zone us-central1-a \
+  -- -N -L 5901:localhost:5901
+```
 </details>
 
 <details>
@@ -105,6 +198,202 @@ python closd/run.py\
 
 - To run the model without fine-tuning, use `exp_name=CLoSD_no_finetune`
 - To run without a monitor, use `headless=True`
+
+<details>
+  <summary><b>Run one sample + save one video (Ubuntu 22.04 VM/VNC)</b></summary>
+
+- In VNC sessions, first check if there are VNC session running:
+
+```
+ss -lntp | grep 5901
+```
+
+If not, start one:
+```
+/opt/TurboVNC/bin/vncserver :1
+```
+
+Set display and use VirtualGL:
+
+```
+export DISPLAY=:1
+```
+
+- Run a single-episode evaluation (uses pretrained `CLoSD_no_finetune` checkpoint):
+
+```
+vglrun -d :0 python closd/run.py \
+  learning=im_big robot=smpl_humanoid \
+  test=True no_log=True epoch=-1 \
+  headless=False no_virtual_display=True \
+  env=closd_sequence env.num_envs=1 env.episode_length=480 \
+  learning.params.config.player.games_num=1 \
+  output_path=output/CLoSD/CLoSD_no_finetune \
+  exp_name=one_sample_seq
+```
+
+- Or use the helper script:
+
+```
+bash scripts/run_one_sample.sh
+```
+
+- Optional overrides:
+
+```
+EXP_NAME=my_sample EPISODE_LENGTH=240 NUM_ENVS=1 bash scripts/run_one_sample.sh
+```
+
+- Custom language prompt override (all sequence states use this text):
+
+```
+bash scripts/run_one_sample.sh env.custom_prompt="A person is moonwalking."
+```
+
+- Equivalent env-var form:
+
+```
+CUSTOM_PROMPT="A person is moonwalking." bash scripts/run_one_sample.sh
+```
+
+- `scripts/run_one_sample.sh` auto-records MP4 by default.
+- For manual command mode, in Isaac Gym viewer, press `L` to start recording, then `L` again to stop/write.
+- Video output: `output/renderings/<exp_name>-<timestamp>.mp4`
+- State output: `output/states/<exp_name>-<timestamp>.pkl`
+
+- If MP4 writing fails due missing backend:
+
+```
+pip install imageio imageio-ffmpeg
+```
+
+- If interrupted while compiling `gymtorch`, clear stale lock and rerun:
+
+```
+rm -f ~/.cache/torch_extensions/py38_cu121/gymtorch/lock
+```
+
+</details>
+
+<details>
+  <summary><b>Run one Text-to-Motion condition (interactive picker + MP4-only output)</b></summary>
+
+- This helper script:
+  - Loads HumanML cached captions from both `t2m_train.npy` and `t2m_test.npy`
+  - Deduplicates + sorts captions, then lets you pick one by index
+  - Also supports direct custom prompts via `--prompt` or `--prompt-file`
+  - Runs `env=closd_t2m` with `env.custom_prompt="<selected caption>"`
+  - Supports toggling HumanML dataset prefix lead-in via `--use-dataset-prefix/--no-dataset-prefix`
+  - Auto-records a video and removes matching state `.pkl` file (MP4-only policy)
+
+- Interactive mode:
+
+```
+bash scripts/run_t2m_condition.sh
+```
+
+- List captions only:
+
+```
+bash scripts/run_t2m_condition.sh --list-only
+```
+
+- Non-interactive mode (pick an index directly):
+
+```
+bash scripts/run_t2m_condition.sh --index 42
+```
+
+- Direct custom prompt (skips caption indexing/selection):
+
+```
+bash scripts/run_t2m_condition.sh --prompt "A person is moonwalking."
+```
+
+- Common options:
+  - `--episode-length <N>` (default `300`)
+  - `--exp-name <name>` (default `t2m_one_condition`)
+  - `--prompt "<text>"` (overrides `--index`)
+  - `--prompt-file <path>` (mutually exclusive with `--prompt`)
+  - `--use-dataset-prefix` / `--no-dataset-prefix` (default disabled)
+  - `--record-frames <N>` (fixed recording cap)
+  - `--record-until-exit` (default; unlimited recording until process exit)
+  - `--isaac-display <display>` (default `:0`)
+
+- Example with overrides:
+
+```
+bash scripts/run_t2m_condition.sh --episode-length 360 --exp-name t2m_jump_demo --index 12
+```
+
+- Output:
+  - MP4: `output/renderings/<exp_name>-<timestamp>.mp4`
+  - Matching state file `output/states/<exp_name>-<timestamp>.pkl` is deleted automatically
+
+- You can pass extra Hydra overrides after `--`:
+
+```
+bash scripts/run_t2m_condition.sh --index 12 -- env.dip.debug_hml=True
+```
+
+- Script details: `scripts/README_t2m_condition.md`
+
+</details>
+
+<details>
+  <summary><b>Run long-horizon one-shot Text-to-Motion (LLM segments + prompt scheduling)</b></summary>
+
+- This flow runs one single CLoSD episode and switches the text prompt at planning-horizon boundaries.
+- It does not stitch multiple runs; output is one continuous MP4 trajectory.
+
+- Set planner env vars (OpenAI Responses API):
+
+```
+export OPENAI_API_KEY=<your_key>
+# optional
+export OPENAI_MODEL=gpt-4o-mini
+export OPENAI_BASE_URL=https://api.openai.com/v1
+```
+
+- One-shot run:
+
+```
+bash scripts/run_t2m_long_horizon.sh \
+  --prompt "A person walks forward, then waves, then crouches, then stands and turns."
+```
+
+- Plan only (create schedule JSON, do not run simulator):
+
+```
+bash scripts/run_t2m_long_horizon.sh \
+  --prompt "A person walks, jumps, and spins." \
+  --plan-only
+```
+
+- Prompt file + common overrides:
+
+```
+bash scripts/run_t2m_long_horizon.sh \
+  --prompt "A person walks, jumps, and spins." \
+  --planning-horizon 40 \
+  --episode-length 420 \
+  --record-frames auto \
+  --exp-name t2m_long_demo
+```
+
+- Runtime behavior:
+  - Script first calls `scripts/plan_t2m_long_horizon.py` to build a schedule JSON.
+  - Then launches one `closd/run.py` with `env=closd_t2m` and `env.segment_schedule_path=<schedule.json>`.
+  - `--record-frames auto` records `episode_length * env.controlFrequencyInv` rendered frames (60fps by default).
+  - Segment prompts are normalized to `a person is ...` (including `a person is ... while ...` when applicable).
+  - During generation, terminal prints current/switching prompt:
+    - `[CLoSDT2M][USE] ... prompt=...`
+    - `[CLoSDT2M][SWITCH] ... prompt=...`
+    - `[CLoSDT2M][EXHAUSTED] ...` (if schedule ends and `env.segment_hold_last=False`)
+
+- If OpenAI planning fails (or key is missing), planner falls back to a heuristic segmentation so the run can still proceed.
+
+</details>
 
 
 ## Evaluate

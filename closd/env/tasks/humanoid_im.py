@@ -86,6 +86,7 @@ class HumanoidIm(humanoid_amp_task.HumanoidAMPTask):
         self._point_goal = torch.zeros(self.num_envs, device=self.device)
         self.random_occlu_idx = torch.zeros((self.num_envs, len(self._track_bodies)), device=self.device, dtype=torch.bool)
         self.random_occlu_count = torch.zeros((self.num_envs, len(self._track_bodies)), device=self.device).long()
+        self._markers_enabled = False
         #################### Devs ####################
 
         super().__init__(cfg=cfg, sim_params=sim_params, physics_engine=physics_engine, device_type=device_type, device_id=device_id, headless=headless)
@@ -562,6 +563,9 @@ class HumanoidIm(humanoid_amp_task.HumanoidAMPTask):
         return
     
     def _update_marker(self):
+        if not self._markers_enabled:
+            return
+
         if flags.show_traj:
             
             motion_times = (self.progress_buf + 1) * self.dt + self._motion_start_times + self._motion_start_times_offset # + 1 for target. 
@@ -622,6 +626,7 @@ class HumanoidIm(humanoid_amp_task.HumanoidAMPTask):
 
         self._marker_actor_ids = self._humanoid_actor_ids.unsqueeze(-1) + to_torch(self._marker_handles, dtype=torch.int32, device=self.device)
         self._marker_actor_ids = self._marker_actor_ids.flatten()
+        self._markers_enabled = True
 
         return
 
@@ -1121,7 +1126,8 @@ class HumanoidIm(humanoid_amp_task.HumanoidAMPTask):
         return
 
     def _draw_task(self):
-        self._update_marker()
+        if self._markers_enabled:
+            self._update_marker()
         return
 
 

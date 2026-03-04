@@ -3,6 +3,10 @@ defaults:
 
 task: CLoSDT2M
 episode_length: 300
+custom_prompt: ''
+segment_schedule_path: ''
+segment_hold_last: True
+use_dataset_prefix: False
 
 dip:
   model_path: closd/diffusion_planner/save/DiP_no-target_10steps_context20_predict40/model000200000.pt  # without target cond

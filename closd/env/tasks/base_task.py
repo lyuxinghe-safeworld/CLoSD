@@ -29,6 +29,7 @@
 import os
 import sys
 import os.path as osp
+import atexit
 
 
 
@@ -119,6 +120,13 @@ class BaseTask():
         self.enable_viewer_sync = True
         self.viewer = None
 
+        # Optional auto-recording for scripted runs (disabled by default).
+        self.auto_record = os.environ.get("CLOSD_AUTO_RECORD", "0") == "1"
+        self.auto_record_frames = int(os.environ.get("CLOSD_AUTO_RECORD_FRAMES", "0"))
+        self._auto_record_frame_count = 0
+        self._auto_record_started = False
+        atexit.register(self._finalize_recording_on_exit)
+
         # if running with a viewer, set up keyboard shortcuts and camera
         self.create_viewer()
         if flags.server_mode:
@@ -189,7 +197,27 @@ class BaseTask():
         self.cfg_name = self.cfg.exp_name
         self._video_path = osp.join(rendering_out, f"{self.cfg_name}-%s.mp4")
         self._states_path = osp.join(states_out, f"{self.cfg_name}-%s.pkl")
+
+        if self.auto_record:
+            self.recording = True
+            self.recording_state_change = True
+            self._auto_record_frame_count = 0
+            self._auto_record_started = False
+            print(f"Auto recording enabled (max_frames={self.auto_record_frames})")
         # self.gym.draw_env_rigid_contacts(self.viewer, self.envs[1], gymapi.Vec3(0.9, 0.3, 0.3), 1.0, True)
+
+    def _finalize_recording_on_exit(self):
+        try:
+            if getattr(self, "recording", False) and "writer" in self.__dict__:
+                self.writer.close()
+                del self.writer
+                if "curr_states_file_name" in self.__dict__:
+                    self._write_states_to_file(self.curr_states_file_name)
+                    print(f"============ Video finished writing {self.curr_states_file_name}============")
+                self.recording = False
+                self.recording_state_change = False
+        except Exception as e:
+            print(f"Warning: failed to finalize recording on exit: {e}")
 
     # set gravity based on up axis and return axis index
     def set_sim_params_up_axis(self, sim_params, axis):
@@ -431,6 +459,18 @@ class BaseTask():
                         if not flags.server_mode:
                             self.writer = imageio.get_writer(self.curr_video_file_name, fps=60, macro_block_size=None)
                     self.writer.append_data(self.color_image)
+                    if self.auto_record and self.auto_record_frames > 0:
+                        if not self._auto_record_started:
+                            # Count only after the episode actually starts advancing.
+                            self._auto_record_started = bool(torch.any(self.progress_buf > 0).item())
+                            if self._auto_record_started:
+                                self._auto_record_frame_count = 0
+                        if self._auto_record_started:
+                            self._auto_record_frame_count += 1
+                            if self._auto_record_frame_count >= self.auto_record_frames:
+                                self.recording = False
+                                self.recording_state_change = True
+                                self.auto_record = False
                     
                     
                 self._record_states()
