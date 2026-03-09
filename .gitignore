@@ -132,6 +132,7 @@ data/*
 output/
 log/
 runs/
+Characters/
 
 *.png
 *.jpg
