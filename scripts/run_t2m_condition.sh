@@ -8,6 +8,8 @@ Usage: bash scripts/run_t2m_condition.sh [options]
 Options:
   --episode-length N   Episode length (default: 300)
   --exp-name NAME      Experiment name prefix for output files (default: t2m_one_condition)
+  --humanoid-model-path PATH
+                      Humanoid MJCF model path (default: mjcf/smpl_humanoid_0.xml)
   --index N            Non-interactive caption index
   --prompt TEXT        Use a direct custom prompt (overrides --index)
   --prompt-file PATH   Load prompt text from file (mutually exclusive with --prompt)
@@ -29,6 +31,7 @@ EXP_NAME="${EXP_NAME:-t2m_one_condition}"
 OUTPUT_PATH="${OUTPUT_PATH:-output/CLoSD/CLoSD_no_finetune}"
 NUM_ENVS="${NUM_ENVS:-1}"
 EPISODE_LENGTH="${EPISODE_LENGTH:-300}"
+HUMANOID_MODEL_PATH="${HUMANOID_MODEL_PATH:-mjcf/smpl_humanoid_0.xml}"
 VNC_DISPLAY="${VNC_DISPLAY:-:1}"
 ISAAC_DISPLAY="${ISAAC_DISPLAY:-:0}"
 AUTO_RECORD="${AUTO_RECORD:-1}"
@@ -59,6 +62,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --exp-name=*)
       EXP_NAME="${1#*=}"
+      shift
+      ;;
+    --humanoid-model-path)
+      HUMANOID_MODEL_PATH="${2:?Missing value for --humanoid-model-path}"
+      shift 2
+      ;;
+    --humanoid-model-path=*)
+      HUMANOID_MODEL_PATH="${1#*=}"
       shift
       ;;
     --index)
@@ -165,6 +176,57 @@ fi
 if ! [[ "$USE_DATASET_PREFIX" =~ ^[01]$ ]]; then
   echo "Error: USE_DATASET_PREFIX must be 0 or 1." >&2
   exit 2
+fi
+
+if [ -z "${HUMANOID_MODEL_PATH//[[:space:]]/}" ]; then
+  echo "Error: --humanoid-model-path must be non-empty." >&2
+  exit 2
+fi
+if [[ "${HUMANOID_MODEL_PATH,,}" != *.xml ]]; then
+  echo "Error: --humanoid-model-path must end with .xml." >&2
+  exit 2
+fi
+if [[ "$HUMANOID_MODEL_PATH" == "~/"* ]]; then
+  HUMANOID_MODEL_PATH="$HOME/${HUMANOID_MODEL_PATH#~/}"
+fi
+
+resolve_humanoid_model_path() {
+  local requested_path="$1"
+  if [[ "$requested_path" = /* ]]; then
+    printf '%s\n' "$requested_path"
+    return 0
+  fi
+
+  local rel_candidate
+  for rel_candidate in \
+    "$requested_path" \
+    "closd/data/assets/$requested_path"; do
+    if [ -f "$REPO_DIR/$rel_candidate" ]; then
+      printf '%s\n' "$REPO_DIR/$rel_candidate"
+      return 0
+    fi
+  done
+
+  printf '%s\n' "$requested_path"
+}
+
+HUMANOID_MODEL_PATH="$(resolve_humanoid_model_path "$HUMANOID_MODEL_PATH")"
+if [ ! -f "$HUMANOID_MODEL_PATH" ]; then
+  echo "Error: Humanoid model not found: $HUMANOID_MODEL_PATH" >&2
+  echo "Hint: use an absolute path, or a path relative to repo root / closd/data/assets." >&2
+  exit 2
+fi
+
+HUMANOID_ASSET_ROOT_OVERRIDE=""
+HUMANOID_ASSET_FILE_OVERRIDE="$HUMANOID_MODEL_PATH"
+if [ "$HUMANOID_MODEL_PATH" != "mjcf/smpl_humanoid.xml" ]; then
+  if [[ "$HUMANOID_MODEL_PATH" = /* ]]; then
+    HUMANOID_ASSET_ROOT_OVERRIDE="$(dirname "$HUMANOID_MODEL_PATH")"
+    HUMANOID_ASSET_FILE_OVERRIDE="$(basename "$HUMANOID_MODEL_PATH")"
+  else
+    HUMANOID_ASSET_ROOT_OVERRIDE="."
+    HUMANOID_ASSET_FILE_OVERRIDE="$HUMANOID_MODEL_PATH"
+  fi
 fi
 
 if [ "$LIST_ONLY" -ne 1 ]; then
@@ -370,11 +432,22 @@ escape_hydra_string() {
 }
 
 hydra_prompt="$(escape_hydra_string "$selected_prompt")"
+hydra_humanoid_asset_file="$(escape_hydra_string "$HUMANOID_ASSET_FILE_OVERRIDE")"
+hydra_humanoid_asset_root=""
+if [ -n "$HUMANOID_ASSET_ROOT_OVERRIDE" ]; then
+  hydra_humanoid_asset_root="$(escape_hydra_string "$HUMANOID_ASSET_ROOT_OVERRIDE")"
+fi
 hydra_use_dataset_prefix=False
 dataset_prefix_label="disabled"
 if [ "$USE_DATASET_PREFIX" -eq 1 ]; then
   hydra_use_dataset_prefix=True
   dataset_prefix_label="enabled"
+fi
+
+if [[ "$HUMANOID_MODEL_PATH" = /* ]]; then
+  humanoid_model_path_log="$HUMANOID_MODEL_PATH"
+else
+  humanoid_model_path_log="$REPO_DIR/$HUMANOID_MODEL_PATH"
 fi
 
 record_mode_label="until process exit"
@@ -385,6 +458,7 @@ fi
 echo "Dataset prefix: $dataset_prefix_label"
 echo "Recording mode: $record_mode_label"
 echo "Episode length: $EPISODE_LENGTH"
+echo "Humanoid model path: $humanoid_model_path_log"
 
 cmd=(
   python closd/run.py
@@ -402,8 +476,13 @@ cmd=(
   output_path="$OUTPUT_PATH"
   exp_name="$EXP_NAME"
   env.use_dataset_prefix="$hydra_use_dataset_prefix"
+  "robot.asset.assetFileName=$hydra_humanoid_asset_file"
   "env.custom_prompt=$hydra_prompt"
 )
+
+if [ -n "$hydra_humanoid_asset_root" ]; then
+  cmd+=("robot.asset.assetRoot=$hydra_humanoid_asset_root")
+fi
 
 set +e
 if command -v vglrun >/dev/null 2>&1; then

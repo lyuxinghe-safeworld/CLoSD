@@ -9,6 +9,8 @@ Options:
   --prompt TEXT         Long prompt text
   --prompt-file PATH    Read long prompt text from file
   --exp-name NAME       Experiment name prefix (default: t2m_long_horizon)
+  --humanoid-model-path PATH
+                        Humanoid MJCF model path (default: mjcf/smpl_humanoid_0.xml)
   --planning-horizon N  Planning horizon in 20fps units (default: 40)
   --episode-length N    Optional override for env.episode_length
   --record-frames N|auto
@@ -28,6 +30,7 @@ OUTPUT_PATH="${OUTPUT_PATH:-output/CLoSD/CLoSD_no_finetune}"
 NUM_ENVS="${NUM_ENVS:-1}"
 PLANNING_HORIZON="${PLANNING_HORIZON:-40}"
 EPISODE_LENGTH_OVERRIDE=""
+HUMANOID_MODEL_PATH="${HUMANOID_MODEL_PATH:-mjcf/smpl_humanoid_0.xml}"
 PROMPT_TEXT="${PROMPT:-}"
 PROMPT_FILE="${PROMPT_FILE:-}"
 RECORD_FRAMES="${RECORD_FRAMES:-auto}"
@@ -62,6 +65,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --exp-name=*)
       EXP_NAME="${1#*=}"
+      shift
+      ;;
+    --humanoid-model-path)
+      HUMANOID_MODEL_PATH="${2:?Missing value for --humanoid-model-path}"
+      shift 2
+      ;;
+    --humanoid-model-path=*)
+      HUMANOID_MODEL_PATH="${1#*=}"
       shift
       ;;
     --planning-horizon)
@@ -150,6 +161,57 @@ if [ "$RECORD_FRAMES" != "auto" ]; then
   fi
 fi
 
+if [ -z "${HUMANOID_MODEL_PATH//[[:space:]]/}" ]; then
+  echo "Error: --humanoid-model-path must be non-empty." >&2
+  exit 2
+fi
+if [[ "${HUMANOID_MODEL_PATH,,}" != *.xml ]]; then
+  echo "Error: --humanoid-model-path must end with .xml." >&2
+  exit 2
+fi
+if [[ "$HUMANOID_MODEL_PATH" == "~/"* ]]; then
+  HUMANOID_MODEL_PATH="$HOME/${HUMANOID_MODEL_PATH#~/}"
+fi
+
+resolve_humanoid_model_path() {
+  local requested_path="$1"
+  if [[ "$requested_path" = /* ]]; then
+    printf '%s\n' "$requested_path"
+    return 0
+  fi
+
+  local rel_candidate
+  for rel_candidate in \
+    "$requested_path" \
+    "closd/data/assets/$requested_path"; do
+    if [ -f "$REPO_DIR/$rel_candidate" ]; then
+      printf '%s\n' "$REPO_DIR/$rel_candidate"
+      return 0
+    fi
+  done
+
+  printf '%s\n' "$requested_path"
+}
+
+HUMANOID_MODEL_PATH="$(resolve_humanoid_model_path "$HUMANOID_MODEL_PATH")"
+if [ ! -f "$HUMANOID_MODEL_PATH" ]; then
+  echo "Error: Humanoid model not found: $HUMANOID_MODEL_PATH" >&2
+  echo "Hint: use an absolute path, or a path relative to repo root / closd/data/assets." >&2
+  exit 2
+fi
+
+HUMANOID_ASSET_ROOT_OVERRIDE=""
+HUMANOID_ASSET_FILE_OVERRIDE="$HUMANOID_MODEL_PATH"
+if [ "$HUMANOID_MODEL_PATH" != "mjcf/smpl_humanoid.xml" ]; then
+  if [[ "$HUMANOID_MODEL_PATH" = /* ]]; then
+    HUMANOID_ASSET_ROOT_OVERRIDE="$(dirname "$HUMANOID_MODEL_PATH")"
+    HUMANOID_ASSET_FILE_OVERRIDE="$(basename "$HUMANOID_MODEL_PATH")"
+  else
+    HUMANOID_ASSET_ROOT_OVERRIDE="."
+    HUMANOID_ASSET_FILE_OVERRIDE="$HUMANOID_MODEL_PATH"
+  fi
+fi
+
 if [ -n "$PROMPT_TEXT" ] && [ -n "$PROMPT_FILE" ]; then
   echo "Error: --prompt and --prompt-file are mutually exclusive." >&2
   exit 2
@@ -229,6 +291,11 @@ echo "Final episode length: $FINAL_EPISODE_LENGTH"
 echo "controlFrequencyInv: $RESOLVED_CONTROL_FREQ_INV"
 echo "Record frames: $FINAL_RECORD_FRAMES"
 echo "Schedule JSON: $SCHEDULE_PATH"
+if [[ "$HUMANOID_MODEL_PATH" = /* ]]; then
+  echo "Humanoid model path: $HUMANOID_MODEL_PATH"
+else
+  echo "Humanoid model path: $REPO_DIR/$HUMANOID_MODEL_PATH"
+fi
 
 if [ "$PLAN_ONLY" -eq 1 ]; then
   exit 0
@@ -242,6 +309,11 @@ escape_hydra_string() {
 }
 
 hydra_schedule_path="$(escape_hydra_string "$SCHEDULE_PATH")"
+hydra_humanoid_asset_file="$(escape_hydra_string "$HUMANOID_ASSET_FILE_OVERRIDE")"
+hydra_humanoid_asset_root=""
+if [ -n "$HUMANOID_ASSET_ROOT_OVERRIDE" ]; then
+  hydra_humanoid_asset_root="$(escape_hydra_string "$HUMANOID_ASSET_ROOT_OVERRIDE")"
+fi
 
 cmd=(
   python closd/run.py
@@ -260,9 +332,14 @@ cmd=(
   exp_name="$EXP_NAME"
   env.use_dataset_prefix=False
   env.dip.planning_horizon="$PLANNING_HORIZON"
+  "robot.asset.assetFileName=$hydra_humanoid_asset_file"
   'env.custom_prompt=""'
   "env.segment_schedule_path=$hydra_schedule_path"
 )
+
+if [ -n "$hydra_humanoid_asset_root" ]; then
+  cmd+=("robot.asset.assetRoot=$hydra_humanoid_asset_root")
+fi
 
 set +e
 if command -v vglrun >/dev/null 2>&1; then

@@ -668,9 +668,29 @@ class Humanoid(BaseTask):
         self._termination_heights = to_torch(self._termination_heights, device=self.device)
         return
 
+    def _resolve_smpl_humanoid_asset_override(self):
+        asset_cfg = self.cfg.robot.asset
+        asset_root = asset_cfg.get("assetRoot", "")
+        asset_file = asset_cfg["assetFileName"]
+
+        default_root = "/"
+        default_file = "mjcf/smpl_humanoid.xml"
+
+        if os.path.isabs(asset_file):
+            return asset_file
+
+        if asset_root and asset_root != default_root:
+            return os.path.normpath(os.path.join(asset_root, asset_file))
+
+        if asset_file != default_file:
+            return os.path.normpath(asset_file)
+
+        return None
+
     def _create_smpl_humanoid_xml(self, num_humanoids, smpl_robot, queue, pid):
         np.random.seed(np.random.randint(5002) * (pid + 1))
         res = {}
+        asset_file_override = self._resolve_smpl_humanoid_asset_override()
         for idx in num_humanoids:
             if self.has_shape_variation:
                 gender_beta = self._amass_gender_betas[idx % self._amass_gender_betas.shape[0]]
@@ -683,7 +703,9 @@ class Humanoid(BaseTask):
             # asset_id = uuid4()
             asset_id = '0'  # using alwats the same asset - without betas
             
-            if not smpl_robot is None:
+            if asset_file_override is not None:
+                asset_file_real = asset_file_override
+            elif not smpl_robot is None:
                 # asset_id = uuid4()
                 # asset_file_real = f"/tmp/smpl/smpl_humanoid_{asset_id}.xml"
                 asset_file_real = f"./closd/data/robot_cache/smpl_humanoid_{asset_id}.xml"
@@ -785,11 +807,14 @@ class Humanoid(BaseTask):
 
                 for idx in np.arange(num_envs):
                     gender_beta, asset_file_real = res_acc[idx]
-                    humanoid_asset = self.gym.load_asset(self.sim, asset_root, asset_file_real, asset_options)
+                    asset_path = os.path.normpath(asset_file_real)
+                    _asset_root = os.path.dirname(asset_path) or "."
+                    _asset_file = os.path.basename(asset_path)
+                    humanoid_asset = self.gym.load_asset(self.sim, _asset_root, _asset_file, asset_options)
                     actuator_props = self.gym.get_asset_actuator_properties(humanoid_asset)
                     motor_efforts = [prop.motor_effort for prop in actuator_props]
                     
-                    sk_tree = SkeletonTree.from_mjcf(asset_file_real)
+                    sk_tree = SkeletonTree.from_mjcf(asset_path)
 
                     # create force sensors at the feet
                     if self.self_obs_v == 3:
@@ -807,7 +832,8 @@ class Humanoid(BaseTask):
                 gender_beta, asset_file_real = self._create_smpl_humanoid_xml([0], robot, None, 0)[0]
                 sk_tree = SkeletonTree.from_mjcf(asset_file_real)
 
-                _asset_root, _asset_file = os.path.dirname(asset_file_real), os.path.basename(asset_file_real)
+                _asset_root = os.path.dirname(asset_file_real) or "."
+                _asset_file = os.path.basename(asset_file_real)
                 # humanoid_asset = self.gym.load_asset(self.sim, asset_root, asset_file_real, asset_options)
                 humanoid_asset = self.gym.load_asset(self.sim, _asset_root, _asset_file, asset_options)
                 actuator_props = self.gym.get_asset_actuator_properties(humanoid_asset)
