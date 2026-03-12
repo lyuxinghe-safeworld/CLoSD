@@ -133,6 +133,7 @@ output/
 log/
 runs/
 Characters/
+.worktrees/
 
 *.png
 *.jpg
