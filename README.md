@@ -1,4 +1,4 @@
-# CLoSD: Closing the Loop between Simulation and Diffusion for multi-task character control
+# CLoSD: Closing the Loop between Simulation and Diffusion for multi-task character control.
 ### ICLR 2025 Spotlight
 [Project Page](https://guytevet.github.io/CLoSD-page/) | [Arxiv](https://arxiv.org/abs/2410.03441) | [Video](https://www.youtube.com/watch?feature=shared&v=O1tzbiDMW8U)
 
